@@ -433,7 +433,7 @@ tr:active td{background:var(--bg4)}
     </div>
     <div class="hdr-right">
       <div class="user-chip"><div class="uav" id="uav">👤</div><span id="uname">—</span></div>
-      <button class="nb-btn" onclick="goView('notifs')" title="Notificaciones">🔔<span class="nbadge hidden" id="nbadge">0</span></button>
+      <button class="nb-btn" onclick=\"goView(\'notifs\')\" title="Notificaciones">🔔<span class="nbadge hidden" id="nbadge">0</span></button>
       <button class="logout-btn" onclick="doLogout()">Salir</button>
     </div>
   </div>
@@ -1122,7 +1122,7 @@ async function pollNotifs() {
     if(!d.length){da.innerHTML='<div class="empty" style="padding:10px"><span class="empty-icon">\\u2705</span>Sin alertas</div>';}
     else{
       const tc={review:'review',approved:'success',rejected:'urgent',published:'info',auto_approved:'info',settings:'review'};
-      da.innerHTML=d.slice(0,3).map(function(n){return '<div class="alert-item '+(tc[n.type]||'info')+'" onclick="goView(\\'notifs\\')" style="margin-bottom:7px"><div class="ai-ico">'+(n.type==='approved'?'\\u2705':n.type==='rejected'?'\\u274c':n.type==='review'?'\\ud83d\\udcec':n.type==='published'?'\\ud83d\\udce4':n.type==='auto_approved'?'\\u26a1':n.type==='settings'?'\\u2699\\ufe0f':'\\ud83d\\udd14')+'</div><div class="ai-txt">'+esc(n.message)+'</div><div class="ai-time">'+new Date(n.at).toLocaleTimeString('es-PY',{hour:'2-digit',minute:'2-digit'})+'</div></div>';}).join('');
+      da.innerHTML=d.slice(0,3).map(function(n){return '<div class="alert-item '+(tc[n.type]||'info')+'" onclick=\"goView(\'notifs\')\" style="margin-bottom:7px"><div class="ai-ico">'+(n.type==='approved'?'\\u2705':n.type==='rejected'?'\\u274c':n.type==='review'?'\\ud83d\\udcec':n.type==='published'?'\\ud83d\\udce4':n.type==='auto_approved'?'\\u26a1':n.type==='settings'?'\\u2699\\ufe0f':'\\ud83d\\udd14')+'</div><div class="ai-txt">'+esc(n.message)+'</div><div class="ai-time">'+new Date(n.at).toLocaleTimeString('es-PY',{hour:'2-digit',minute:'2-digit'})+'</div></div>';}).join('');
     }
   }
   // Decisions feed — visible to ALL 4 users
