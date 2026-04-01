@@ -1151,10 +1151,10 @@ async function pollNotifs() {
   // Dash alerts (recent notifications)
   const da=document.getElementById('dash-alerts');
   if(da){
-    if(!d.length){da.innerHTML='<div class="empty" style="padding:10px"><span class="empty-icon">\\u2705</span>Sin alertas</div>';}
+    if(!d.length){da.innerHTML='<div class="empty" style="padding:10px"><span class="empty-icon">✅</span>Sin alertas</div>';}
     else{
       const tc={review:'review',approved:'success',rejected:'urgent',published:'info',auto_approved:'info',settings:'review'};
-      da.innerHTML=d.slice(0,3).map(function(n){return '<div class="alert-item '+(tc[n.type]||'info')+'" onclick="goView(\\'notifs\\')" style="margin-bottom:7px"><div class="ai-ico">'+(n.type==='approved'?'\\u2705':n.type==='rejected'?'\\u274c':n.type==='review'?'\\ud83d\\udcec':n.type==='published'?'\\ud83d\\udce4':n.type==='auto_approved'?'\\u26a1':n.type==='settings'?'\\u2699\\ufe0f':'\\ud83d\\udd14')+'</div><div class="ai-txt">'+esc(n.message)+'</div><div class="ai-time">'+new Date(n.at).toLocaleTimeString('es-PY',{hour:'2-digit',minute:'2-digit'})+'</div></div>';}).join('');
+      da.innerHTML=d.slice(0,3).map(function(n){return '<div class="alert-item '+(tc[n.type]||'info')+'" onclick="goView(&apos;notifs&apos;)" style="margin-bottom:7px"><div class="ai-ico">'+(n.type==='approved'?'✅':n.type==='rejected'?'❌':n.type==='review'?'📬':n.type==='published'?'📤':n.type==='auto_approved'?'⚡':n.type==='settings'?'⚙️':'🔔')+'</div><div class="ai-txt">'+esc(n.message)+'</div><div class="ai-time">'+new Date(n.at).toLocaleTimeString('es-PY',{hour:'2-digit',minute:'2-digit'})+'</div></div>';}).join('');
     }
   }
   // Decisions feed — visible to ALL 4 users
@@ -1162,12 +1162,12 @@ async function pollNotifs() {
   if(df){
     const decTypes=['approved','rejected','auto_approved','published','settings'];
     const decisions=d.filter(function(n){return decTypes.includes(n.type);}).slice(0,6);
-    if(!decisions.length){df.innerHTML='<div style="font-size:12px;color:var(--text3);padding:8px 0">A\\u00fan no hay decisiones registradas.</div>';}
+    if(!decisions.length){df.innerHTML='<div style="font-size:12px;color:var(--text3);padding:8px 0">Aún no hay decisiones registradas.</div>';}
     else{
-      const ico={approved:'\\u2705',rejected:'\\u274c',auto_approved:'\\u26a1',published:'\\ud83d\\udce4',settings:'\\u2699\\ufe0f'};
+      const ico={approved:'✅',rejected:'❌',auto_approved:'⚡',published:'📤',settings:'⚙️'};
       df.innerHTML=decisions.map(function(n){return '<div class="df-item '+(n.type||'')+'">'
-        +'<div class="df-ico">'+(ico[n.type]||'\\ud83d\\udd14')+'</div>'
-        +'<div class="df-txt">'+esc(n.message)+'<div style="font-size:10px;color:var(--text3);margin-top:2px">'+esc(n.from)+' \\u00b7 '+new Date(n.at).toLocaleString('es-PY',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+'</div></div>'
+        +'<div class="df-ico">'+(ico[n.type]||'🔔')+'</div>'
+        +'<div class="df-txt">'+esc(n.message)+'<div style="font-size:10px;color:var(--text3);margin-top:2px">'+esc(n.from)+' · '+new Date(n.at).toLocaleString('es-PY',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+'</div></div>'
         +'</div>';}).join('');
     }
   }
