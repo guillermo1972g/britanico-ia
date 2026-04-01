@@ -1,16 +1,60 @@
 const express = require('express');
+const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 
+const rateLimit = require('express-rate-limit');
+const cron = require('node-cron');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'britanico-ia-secret-2024';
+const ALLOWED_ORIGIN = process.env.APP_URL || 'https://britanico-ia-production.up.railway.app';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) { console.error('⚠️  JWT_SECRET no configurado en variables de entorno. El servidor no puede iniciar de forma segura.'); process.exit(1); }
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
+const NOTIFY_EMAIL = 'wdreifus@gmail.com';
 
-app.use(cors());
+/* ══════ EMAIL HELPER ══════ */
+async function sendEmail(subject, html) {
+  const user = process.env.GMAIL_USER;
+  const pass = process.env.GMAIL_APP_PASSWORD;
+  if (!user || !pass) {
+    console.log('[Email] Variables GMAIL_USER / GMAIL_APP_PASSWORD no configuradas — email omitido.');
+    return;
+  }
+  try {
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user, pass }
+    });
+    await transporter.sendMail({
+      from: `"Shopping Británico IA" <${user}>`,
+      to: NOTIFY_EMAIL,
+      subject,
+      html
+    });
+    console.log('[Email] Enviado:', subject);
+  } catch (e) {
+    console.error('[Email] Error:', e.message);
+  }
+}
+
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow requests with no origin (Railway healthcheck, server-to-server) or matching domain
+    if (!origin || origin === ALLOWED_ORIGIN || /\.railway\.app$/.test(origin)) return cb(null, true);
+    cb(new Error('CORS: origen no permitido'));
+  },
+  credentials: true
+}));
+
+// Rate limiting — protege login y endpoints de AI
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { error: 'Demasiados intentos. Esperá 15 minutos.' } });
+const aiLimiter    = rateLimit({ windowMs: 60 * 1000, max: 30, message: { error: 'Límite de mensajes alcanzado. Esperá un momento.' } });
+
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -20,12 +64,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 function read(f) { try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, f + '.json'), 'utf8')); } catch { return null; } }
 function write(f, d) { fs.writeFileSync(path.join(DATA_DIR, f + '.json'), JSON.stringify(d, null, 2)); }
 
-/* ══════ ROLES
-   admin  → control total
-   jefa   → aprueba/rechaza, ve reportes y alertas
-   equipo → crea contenido, envía a revisión, publica aprobados,
-             gestiona WhatsApp, reseñas y calendario
-══════ */
+/* ══════ ROLES: admin → control total | equipo → todo lo demás ══════ */
 
 function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
@@ -34,7 +73,7 @@ function auth(req, res, next) {
   catch { res.status(401).json({ error: 'Sesión expirada. Ingresá de nuevo.' }); }
 }
 const adminOnly = (req, res, next) => req.user.role === 'admin' ? next() : res.status(403).json({ error: 'Solo administradores.' });
-const canApprove = (req, res, next) => ['admin','jefa'].includes(req.user.role) ? next() : res.status(403).json({ error: 'Solo la jefa puede aprobar.' });
+const canApprove = (req, res, next) => ['admin','directora'].includes(req.user.role) ? next() : res.status(403).json({ error: 'Solo la Directora o el administrador pueden aprobar.' });
 
 function addNotif(data) {
   const list = read('notifications') || [];
@@ -55,19 +94,21 @@ app.put('/api/settings', auth, canApprove, (req, res) => {
 });
 
 /* AUTH */
-app.post('/api/auth/check', (req, res) => {
+app.post('/api/auth/check', loginLimiter, (req, res) => {
   const { email } = req.body;
   const users = read('users') || [];
   const user = users.find(u => u.email.toLowerCase() === email?.toLowerCase());
   if (!user) return res.status(404).json({ error: 'No existe una cuenta con ese email.' });
+  if (user.disabled) return res.status(403).json({ error: 'Tu acceso al sistema está deshabilitado. Contactá al administrador.' });
   res.json({ requiresPassword: !user.noPassword, name: user.name });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', loginLimiter, (req, res) => {
   const { email, password } = req.body;
   const users = read('users') || [];
   const user = users.find(u => u.email.toLowerCase() === email?.toLowerCase());
   if (!user) return res.status(401).json({ error: 'No existe una cuenta con ese email.' });
+  if (user.disabled) return res.status(403).json({ error: 'Tu acceso al sistema está deshabilitado. Contactá al administrador.' });
   if (!user.noPassword && !bcrypt.compareSync(password || '', user.password || ''))
     return res.status(401).json({ error: 'Contraseña incorrecta.' });
   const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
@@ -79,17 +120,19 @@ app.post('/api/auth/login', (req, res) => {
 app.get('/api/auth/me', auth, (req, res) => res.json(req.user));
 
 /* AI PROXY */
-app.post('/api/ai/chat', auth, async (req, res) => {
+app.post('/api/ai/chat', auth, aiLimiter, async (req, res) => {
   if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY no configurada en Railway.' });
-  if (req.user.role === 'jefa') return res.status(403).json({ error: 'La jefa no usa el agente de IA directamente.' });
   try {
     const { messages, system, tools } = req.body;
-    const body = { model: 'claude-sonnet-4-20250514', max_tokens: 1000, system, messages };
+    const body = { model: 'claude-sonnet-4-20250514', max_tokens: 4000, system, messages };
     if (tools) body.tools = tools;
     const r1 = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify(body) });
     const d1 = await r1.json();
     if (d1.stop_reason === 'tool_use') {
-      const toolResults = d1.content.filter(c => c.type === 'tool_use').map(tu => ({ type: 'tool_result', tool_use_id: tu.id, content: 'Búsqueda completada.' }));
+      const toolResults = d1.content.filter(c => c.type === 'tool_use').map(tu => ({
+        type: 'tool_result', tool_use_id: tu.id,
+        content: [{ type: 'text', text: '' }]
+      }));
       const body2 = { ...body, messages: [...messages, { role: 'assistant', content: d1.content }, { role: 'user', content: toolResults }] };
       const r2 = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify(body2) });
       return res.json(await r2.json());
@@ -98,21 +141,65 @@ app.post('/api/ai/chat', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/* AI STREAMING */
+app.post('/api/ai/chat/stream', auth, aiLimiter, async (req, res) => {
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY no configurada en Railway.' });
+  const { messages, system } = req.body;
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4000, stream: true, system, messages })
+    });
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (!data || data === '[DONE]') continue;
+        try {
+          const ev = JSON.parse(data);
+          if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+            res.write(`data: ${JSON.stringify({ text: ev.delta.text })}\n\n`);
+          } else if (ev.type === 'message_stop') {
+            res.write('data: [DONE]\n\n');
+          } else if (ev.type === 'error') {
+            res.write(`data: ${JSON.stringify({ error: ev.error?.message || 'Error IA' })}\n\n`);
+          }
+        } catch {}
+      }
+    }
+    res.end();
+  } catch (e) {
+    res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
+    res.end();
+  }
+});
+
 /* BRAND */
 app.get('/api/brand', auth, (req, res) => res.json(read('brand') || {}));
 app.put('/api/brand', auth, (req, res) => {
-  if (req.user.role === 'jefa') return res.status(403).json({ error: 'Sin permisos.' });
   write('brand', req.body); res.json({ ok: true });
 });
 
 /* QUEUE */
 app.get('/api/queue', auth, (req, res) => {
   const q = read('queue') || [];
-  if (['admin','jefa'].includes(req.user.role)) return res.json(q);
+  if (['admin','directora'].includes(req.user.role)) return res.json(q);
   return res.json(q.filter(i => i.authorId === req.user.id || i.status === 'approved'));
 });
 app.post('/api/queue', auth, (req, res) => {
-  if (req.user.role === 'jefa') return res.status(403).json({ error: 'Sin permisos.' });
   const q = read('queue') || [];
   const settings = read('settings') || { autoApprove: false };
   const autoApp = settings.autoApprove;
@@ -131,8 +218,8 @@ app.put('/api/queue/:id', auth, (req, res) => {
   const q = read('queue') || [];
   const idx = q.findIndex(i => i.id == req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'No encontrado.' });
-  if (['approved','rejected'].includes(req.body.status) && !['admin','jefa'].includes(req.user.role))
-    return res.status(403).json({ error: 'Solo la jefa puede aprobar o rechazar.' });
+  if (['approved','rejected'].includes(req.body.status) && req.user.role !== 'admin' && req.user.role !== 'directora')
+    return res.status(403).json({ error: 'Solo la Directora o el administrador pueden aprobar o rechazar.' });
   q[idx] = { ...q[idx], ...req.body, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
   write('queue', q);
   if (req.body.status === 'approved') addNotif({ type: 'approved', from: req.user.name, message: `✅ Aprobado: "${(q[idx].title||'').slice(0,60)}" — listo para publicar.` });
@@ -145,7 +232,6 @@ app.delete('/api/queue/:id', auth, adminOnly, (req, res) => { write('queue', (re
 /* CALENDAR */
 app.get('/api/calendar', auth, (req, res) => res.json(read('calendar') || {}));
 app.post('/api/calendar', auth, (req, res) => {
-  if (req.user.role === 'jefa') return res.status(403).json({ error: 'Sin permisos.' });
   const cal = read('calendar') || {};
   const { date, post } = req.body;
   if (!cal[date]) cal[date] = [];
@@ -153,7 +239,6 @@ app.post('/api/calendar', auth, (req, res) => {
   write('calendar', cal); res.json({ ok: true });
 });
 app.delete('/api/calendar/:date/:idx', auth, (req, res) => {
-  if (req.user.role === 'jefa') return res.status(403).json({ error: 'Sin permisos.' });
   const cal = read('calendar') || {};
   if (cal[req.params.date]) { cal[req.params.date].splice(req.params.idx, 1); write('calendar', cal); }
   res.json({ ok: true });
@@ -172,7 +257,7 @@ app.post('/api/users', auth, adminOnly, (req, res) => {
   if (!name||!email||!role) return res.status(400).json({ error: 'Nombre, email y rol son requeridos.' });
   if (!noPassword && !password) return res.status(400).json({ error: 'Contraseña requerida para este usuario.' });
   if (users.find(u => u.email.toLowerCase() === email.toLowerCase())) return res.status(400).json({ error: 'Email ya existe.' });
-  if (!['admin','jefa','equipo'].includes(role)) return res.status(400).json({ error: 'Rol inválido.' });
+  if (!['admin','directora','equipo'].includes(role)) return res.status(400).json({ error: 'Rol inválido.' });
   users.push({ id: Date.now(), name, email, password: noPassword ? null : bcrypt.hashSync(password, 10), noPassword, role });
   write('users', users); res.json({ ok: true });
 });
@@ -257,7 +342,7 @@ app.delete('/api/refbrands/:id', auth, (req, res) => {
 // Helper: call Claude with optional web search
 async function callClaude(system, userMsg, useSearch = false) {
   const body = {
-    model: 'claude-sonnet-4-20250514', max_tokens: 1000,
+    model: 'claude-sonnet-4-20250514', max_tokens: 4000,
     system, messages: [{ role: 'user', content: userMsg }]
   };
   if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
@@ -265,7 +350,10 @@ async function callClaude(system, userMsg, useSearch = false) {
   const r1 = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: HEADERS, body: JSON.stringify(body) });
   const d1 = await r1.json();
   if (d1.stop_reason === 'tool_use') {
-    const toolResults = d1.content.filter(c => c.type === 'tool_use').map(tu => ({ type: 'tool_result', tool_use_id: tu.id, content: 'Búsqueda realizada.' }));
+    const toolResults = d1.content.filter(c => c.type === 'tool_use').map(tu => ({
+      type: 'tool_result', tool_use_id: tu.id,
+      content: [{ type: 'text', text: '' }]
+    }));
     const body2 = { ...body, messages: [...body.messages, { role: 'assistant', content: d1.content }, { role: 'user', content: toolResults }] };
     const r2 = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: HEADERS, body: JSON.stringify(body2) });
     const d2 = await r2.json();
@@ -353,14 +441,138 @@ app.post('/api/research', auth, async (req, res) => {
   }
 });
 
+/* ══════ TOGGLE USER ACCESS ══════ */
+app.put('/api/users/:id/toggle-access', auth, adminOnly, async (req, res) => {
+  if (req.user.id == req.params.id)
+    return res.status(400).json({ error: 'No podés deshabilitar tu propio acceso.' });
+  const users = read('users') || [];
+  const idx = users.findIndex(u => u.id == req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Usuario no encontrado.' });
+  users[idx].disabled = !users[idx].disabled;
+  write('users', users);
+  const action = users[idx].disabled ? 'deshabilitado' : 'habilitado';
+  addNotif({ type: 'settings', from: req.user.name, message: `🔐 ${req.user.name} ${action} el acceso de ${users[idx].name}.` });
+  const when = new Date().toLocaleString('es-PY', { timeZone: 'America/Asuncion', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  await sendEmail(
+    `🔐 Acceso ${action} — ${users[idx].name} · Shopping Británico IA`,
+    `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+      <h2 style="color:${users[idx].disabled?'#e05060':'#00d4a0'};margin-bottom:4px">Shopping Británico IA</h2>
+      <p style="color:#666;font-size:13px;margin-bottom:20px">Notificación de acceso</p>
+      <div style="background:#f5f5f5;border-radius:8px;padding:16px;margin-bottom:16px">
+        <p style="margin:0 0 8px"><strong>Usuario:</strong> ${users[idx].name}</p>
+        <p style="margin:0 0 8px"><strong>Email:</strong> ${users[idx].email}</p>
+        <p style="margin:0 0 8px"><strong>Acción:</strong> Acceso <strong>${action}</strong> por ${req.user.name}</p>
+        <p style="margin:0"><strong>Fecha y hora:</strong> ${when}</p>
+      </div>
+    </div>`
+  );
+  res.json({ ok: true, disabled: users[idx].disabled });
+});
+
+/* ══════ CHANGE PASSWORD ══════ */
+app.put('/api/auth/change-password', auth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!newPassword || newPassword.length < 6)
+    return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 6 caracteres.' });
+
+  const users = read('users') || [];
+  const idx = users.findIndex(u => u.id === req.user.id);
+  if (idx === -1) return res.status(404).json({ error: 'Usuario no encontrado.' });
+
+  const user = users[idx];
+
+  // If user has password, verify current one
+  if (!user.noPassword && user.password) {
+    if (!currentPassword || !bcrypt.compareSync(currentPassword, user.password))
+      return res.status(401).json({ error: 'La contraseña actual es incorrecta.' });
+  }
+
+  users[idx].password = bcrypt.hashSync(newPassword, 10);
+  users[idx].noPassword = false;
+  write('users', users);
+
+  // Log activity
+  const log = read('activity') || [];
+  log.unshift({ user: user.name, role: user.role, action: 'password_changed', at: new Date().toISOString() });
+  write('activity', log.slice(0, 200));
+
+  // Notify admin by email
+  const when = new Date().toLocaleString('es-PY', { timeZone: 'America/Asuncion', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  await sendEmail(
+    `🔐 Cambio de contraseña — ${user.name} · Shopping Británico IA`,
+    `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+      <h2 style="color:#00d4a0;margin-bottom:4px">Shopping Británico IA</h2>
+      <p style="color:#666;font-size:13px;margin-bottom:20px">Notificación de seguridad</p>
+      <div style="background:#f5f5f5;border-radius:8px;padding:16px;margin-bottom:16px">
+        <p style="margin:0 0 8px"><strong>Usuario:</strong> ${user.name}</p>
+        <p style="margin:0 0 8px"><strong>Email:</strong> ${user.email}</p>
+        <p style="margin:0 0 8px"><strong>Rol:</strong> ${user.role}</p>
+        <p style="margin:0"><strong>Fecha y hora:</strong> ${when}</p>
+      </div>
+      <p style="color:#888;font-size:12px">Si no reconocés este cambio, ingresá al panel de administración y revisá los usuarios.</p>
+    </div>`
+  );
+
+  addNotif({ type: 'settings', from: user.name, message: `🔐 ${user.name} cambió su contraseña.` });
+  res.json({ ok: true });
+});
+
+/* ══════ FORGOT / RESET PASSWORD ══════ */
+app.post('/api/auth/forgot-password', loginLimiter, async (req, res) => {
+  const { email } = req.body;
+  const users = read('users') || [];
+  const user = users.find(u => u.email.toLowerCase() === email?.toLowerCase());
+  if (!user || user.disabled) return res.json({ ok: true }); // no enumeration
+  const token = require('crypto').randomBytes(32).toString('hex');
+  const expires = Date.now() + 1000 * 60 * 60; // 1 hora
+  const resets = read('resets') || [];
+  write('resets', [...resets.filter(r => r.email !== user.email), { email: user.email, token, expires }]);
+  const resetUrl = `${process.env.APP_URL || 'https://britanico-ia-production.up.railway.app'}/reset-password.html?token=${token}`;
+  console.log(`[Reset] Link para ${user.email}: ${resetUrl}`);
+  await sendEmail(
+    '🔐 Restablecer contraseña — Shopping Británico IA',
+    `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+      <h2 style="color:#00d4a0">Shopping Británico IA</h2>
+      <p>Hola <strong>${user.name}</strong>,</p>
+      <p>Hacé clic para restablecer tu contraseña. El enlace expira en <strong>1 hora</strong>.</p>
+      <div style="text-align:center;margin:28px 0">
+        <a href="${resetUrl}" style="background:#00d4a0;color:#0a1420;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700">Restablecer contraseña →</a>
+      </div>
+      <p style="color:#999;font-size:12px">Si no solicitaste esto, ignorá este email.</p>
+    </div>`
+  );
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { token, newPassword } = req.body;
+  if (!newPassword || newPassword.length < 6)
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
+  const resets = read('resets') || [];
+  const record = resets.find(r => r.token === token && r.expires > Date.now());
+  if (!record) return res.status(400).json({ error: 'El enlace es inválido o expiró. Solicitá uno nuevo.' });
+  const users = read('users') || [];
+  const idx = users.findIndex(u => u.email === record.email);
+  if (idx === -1) return res.status(404).json({ error: 'Usuario no encontrado.' });
+  users[idx].password = bcrypt.hashSync(newPassword, 10);
+  users[idx].noPassword = false;
+  write('users', users);
+  write('resets', resets.filter(r => r.token !== token));
+  const log = read('activity') || [];
+  log.unshift({ user: users[idx].name, role: users[idx].role, action: 'password_reset', at: new Date().toISOString() });
+  write('activity', log.slice(0, 200));
+  addNotif({ type: 'settings', from: users[idx].name, message: `🔐 ${users[idx].name} restableció su contraseña.` });
+  res.json({ ok: true });
+});
+
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
 /* INIT */
 function initData() {
   if (!read('users')) {
     write('users', [
-      { id: 1, name: 'Soporte Técnico', email: 'wdreifus@gmail.com', password: bcrypt.hashSync('Admin2024!', 10), noPassword: false, role: 'admin' },
-      { id: 2, name: 'Sra Lidia', email: 'lidiadreifus@gmail.com', password: null, noPassword: true, role: 'jefa' },
+      { id: 1, name: 'Soporte Técnico', email: 'wdreifus@gmail.com', password: null, noPassword: true, role: 'admin' },
+      { id: 2, name: 'Sra Lidia', email: 'lidiadreifus@gmail.com', password: null, noPassword: true, role: 'directora' },
       { id: 3, name: 'Mirella', email: 'equipo1@britanico.com.py', password: bcrypt.hashSync('Equipo2024!', 10), noPassword: false, role: 'equipo' },
       { id: 4, name: 'Jorge', email: 'equipo2@britanico.com.py', password: bcrypt.hashSync('Equipo2024!', 10), noPassword: false, role: 'equipo' },
     ]);
@@ -370,4 +582,26 @@ function initData() {
   if (!read('settings')) write('settings', { autoApprove: false });
 }
 initData();
-app.listen(PORT, () => console.log(`🚀 Shopping Británico IA — puerto ${PORT}`));
+
+/* ══════ CRON: investigación semanal automática (lunes 7am PY) ══════ */
+cron.schedule('0 7 * * 1', async () => {
+  if (!ANTHROPIC_KEY) return;
+  console.log('[Cron] Iniciando investigación semanal automática...');
+  const competitors = read('competitors') || [];
+  const refbrands   = read('refbrands')   || [];
+  for (const c of competitors) {
+    try {
+      console.log(`[Cron] Investigando competidor: ${c.name}`);
+      await performResearch(c.name, 'competitor', c, 'competitors', 'Sistema (semanal)');
+    } catch (e) { console.error(`[Cron] Error en ${c.name}:`, e.message); }
+  }
+  for (const b of refbrands) {
+    try {
+      console.log(`[Cron] Investigando marca ref: ${b.name}`);
+      await performResearch(b.name, 'refbrand', b, 'refbrands', 'Sistema (semanal)');
+    } catch (e) { console.error(`[Cron] Error en ${b.name}:`, e.message); }
+  }
+  console.log('[Cron] Investigación semanal completada.');
+}, { timezone: 'America/Asuncion' });
+
+app.listen(PORT, () => console.log(`🚀 Shopping Británico IA v4.0 — puerto ${PORT}`));
