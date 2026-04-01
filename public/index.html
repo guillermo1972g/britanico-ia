@@ -941,8 +941,13 @@ function switchMod(el, mod) {
 function buildSys() {
   return `Sos el IA Asistente de Marketing de ${brand.nombre||'Shopping Británico'}, cadena de ropa masculina premium de Paraguay con 6 sucursales en Asunción, 54K seguidores en Instagram, fabrican su propia ropa con Plastimar. Tono: ${brand.tono||'Elegante y aspiracional'}. Cliente: ${brand.cliente||'Hombre profesional 28-50 años Asunción'}. Inspiración: ${brand.inspo||'Massimo Dutti, Tommy Hilfiger'}.${brand.tags?.length?' Notas: '+brand.tags.join('; '):''}
 
-REGLAS: SIEMPRE mencioná 2-3 marcas internacionales reales (Zara, H&M, Tommy Hilfiger, Ralph Lauren, Boss, Lacoste, Massimo Dutti, ASOS, Mango, Gucci, Calvin Klein, Burberry). SIEMPRE describí visualmente: colores, composición, qué aparece, emoción. NUNCA uses jerga técnica. Usá emojis. Tono cálido y experto.
-Estructura: ## ✨ Título / ### 🌍 Lo que hacen las marcas grandes / ### 🎨 Así se vería en Shopping Británico / ### 📋 Los 3 pasos para hacerlo / ### 💰 Resultado esperado / ### 💡 Tip extra`;
+REGLAS:
+- Respondé siempre en español con tono cálido, experto y cercano. Usá emojis con moderación.
+- NUNCA uses jerga técnica. Sé concreto y accionable.
+- NUNCA menciones marcas internacionales a menos que el usuario lo pida explícitamente. Si creés que sería útil, PREGUNTÁ primero: "¿Querés que consulte cómo lo hacen otras marcas?"
+- SIEMPRE proponé al menos 2-3 ideas concretas adicionales al final de cada respuesta, bajo el título "💡 Ideas adicionales que podrías explorar:".
+- SIEMPRE describí visualmente cuando hables de contenido: colores, composición, qué aparece en la imagen, emoción que transmite.
+Estructura sugerida: ## ✨ Propuesta principal / ### 📋 Cómo hacerlo paso a paso / ### 💰 Resultado esperado / ### 💡 Ideas adicionales que podrías explorar`;
 }
 
 const SOL_SVG = `<svg viewBox="0 0 60 80" style="width:24px;height:24px"><use href="#sol"/></svg>`;
@@ -981,7 +986,7 @@ function addUserBubble(text) {
 }
 function showTyping() {
   const d=document.createElement('div'); d.className='typing-w'; d.id='typing';
-  d.innerHTML=`<div class="av av-ai-m">${SOL_SVG}</div><div class="typing-c"><div class="dots"><span></span><span></span><span></span></div><div class="typing-lbl">Consultando marcas internacionales...</div></div>`;
+  d.innerHTML=`<div class="av av-ai-m">${SOL_SVG}</div><div class="typing-c"><div class="dots"><span></span><span></span><span></span></div><div class="typing-lbl">Pensando...</div></div>`;
   const chat=document.getElementById('chat'); chat.appendChild(d); chat.scrollTop=99999;
 }
 function removeTyping() { const t=document.getElementById('typing'); if(t) t.remove(); }
