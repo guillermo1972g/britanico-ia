@@ -3,7 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>IA Asistente de Marketing — Shopping Británico</title>
+<title>IA Asistente de Marketing v4 — Shopping Británico</title>
+<!-- PWA -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#00d4a0">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Británico IA">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -221,6 +230,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);dis
 .ai-prose strong{color:var(--text);font-weight:600}
 .ai-prose em{color:var(--accent);font-style:normal}
 .ai-prose pre{background:var(--bg);border:1px solid var(--border2);border-radius:var(--rs);padding:9px 12px;margin:7px 0;font-family:'DM Mono',monospace;font-size:11px;color:var(--accent);white-space:pre-wrap;word-break:break-word}
+.stream-cursor{display:inline-block;width:2px;height:1em;background:var(--accent);margin-left:1px;animation:blink .7s infinite;vertical-align:text-bottom}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
 .submit-row{display:flex;gap:7px;padding:10px 14px;border-top:1px solid var(--border);background:var(--bg4);overflow-x:auto}
 .sub-btn{padding:9px 13px;border-radius:var(--rs);border:none;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:all .15s}
 .sb-send{background:var(--accent);color:#000}
@@ -411,13 +422,23 @@ tr:active td{background:var(--bg4)}
   <div class="login-box">
     <div class="login-sol"><svg viewBox="0 0 60 80"><use href="#sol"/></svg></div>
     <div class="login-title">IA Asistente de Marketing</div>
-    <div class="login-sub" id="login-sub">Shopping Británico</div>
+    <div class="login-sub" id="login-sub">Shopping Británico · v4</div>
     <div class="lf"><label>Tu email</label><input type="email" id="l-email" placeholder="tu@email.com" autocomplete="email" onkeydown="if(event.key==='Enter')checkEmail()"></div>
     <div class="lf hidden" id="pass-wrap"><label>Contraseña</label><input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()"></div>
     <button class="login-btn" id="login-btn" onclick="checkEmail()">Continuar →</button>
     <div class="login-error" id="login-error"></div>
     <div style="margin-top:10px;text-align:center;display:none" id="back-link">
       <span onclick="resetLogin()" style="font-size:12px;color:var(--text3);cursor:pointer;text-decoration:underline">← Usar otro email</span>
+    </div>
+    <div style="margin-top:8px;text-align:center;display:none" id="forgot-link">
+      <span onclick="showForgot()" style="font-size:12px;color:var(--text3);cursor:pointer;text-decoration:underline">¿Olvidaste tu contraseña?</span>
+    </div>
+    <!-- FORGOT PASSWORD MODAL -->
+    <div id="forgot-modal" style="display:none;margin-top:16px;background:var(--bg3);border-radius:12px;padding:16px;border:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text)">Restablecer contraseña</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px">Te enviaremos un enlace a tu email para crear una nueva contraseña.</div>
+      <button onclick="sendForgot()" id="forgot-btn" style="width:100%;padding:10px;background:var(--accent);color:#0a1420;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">Enviar enlace</button>
+      <div id="forgot-msg" style="font-size:12px;margin-top:8px;min-height:16px;text-align:center"></div>
     </div>
   </div>
 </div>
@@ -429,7 +450,7 @@ tr:active td{background:var(--bg4)}
     <svg class="hdr-logo" viewBox="0 0 60 80"><use href="#sol"/></svg>
     <div class="hdr-brand">
       <div class="hdr-name">IA Asistente de Marketing</div>
-      <div class="hdr-sub">Shopping Británico</div>
+      <div class="hdr-sub">Shopping Británico · v4</div>
     </div>
     <div class="hdr-right">
       <div class="user-chip"><div class="uav" id="uav">👤</div><span id="uname">—</span></div>
@@ -762,6 +783,7 @@ async function checkEmail() {
       document.getElementById('pass-wrap').classList.remove('hidden');
       document.getElementById('l-email').disabled = true;
       document.getElementById('back-link').style.display = 'block';
+      document.getElementById('forgot-link').style.display = 'block';
       document.getElementById('login-sub').textContent = `Hola${d.name ? ', ' + d.name.split(' ')[0] : ''} 👋`;
       btn.disabled = false; btn.textContent = 'Ingresar';
       btn.onclick = login;
@@ -803,12 +825,38 @@ function resetLogin() {
   document.getElementById('l-pass').value = '';
   document.getElementById('pass-wrap').classList.add('hidden');
   document.getElementById('back-link').style.display = 'none';
-  document.getElementById('login-sub').textContent = 'Shopping Británico';
+  document.getElementById('forgot-link').style.display = 'none';
+  document.getElementById('forgot-modal').style.display = 'none';
+  document.getElementById('login-sub').textContent = 'Shopping Británico · v4';
   document.getElementById('login-error').textContent = '';
   document.getElementById('login-btn').disabled = false;
   document.getElementById('login-btn').textContent = 'Continuar →';
   document.getElementById('login-btn').onclick = checkEmail;
   document.getElementById('l-email').focus();
+}
+
+function showForgot() {
+  const m = document.getElementById('forgot-modal');
+  m.style.display = m.style.display === 'none' ? 'block' : 'none';
+  document.getElementById('forgot-msg').textContent = '';
+}
+
+async function sendForgot() {
+  const email = document.getElementById('l-email').value.trim();
+  const msg = document.getElementById('forgot-msg');
+  const btn = document.getElementById('forgot-btn');
+  if (!email) { msg.style.color='var(--red)'; msg.textContent='Ingresá tu email primero.'; return; }
+  btn.disabled = true; btn.textContent = 'Enviando...';
+  try {
+    await fetch(API + '/api/auth/forgot-password', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email}) });
+    msg.style.color = 'var(--accent)';
+    msg.textContent = '✅ Si ese email existe, recibirás el enlace en breve.';
+    btn.disabled = false; btn.textContent = 'Enviar enlace';
+  } catch(e) {
+    msg.style.color = 'var(--red)';
+    msg.textContent = 'Error de conexión.';
+    btn.disabled = false; btn.textContent = 'Enviar enlace';
+  }
 }
 
 function doLogout() {
@@ -931,14 +979,52 @@ async function send() {
   if(!chatHist[curMod]) chatHist[curMod]=[];
   chatHist[curMod].push({role:'user',content:text});
   addUserBubble(text);
-  showTyping();
+
+  // Create AI bubble with streaming content
+  const { card, prose } = addAIBubbleStreaming();
+  let fullText = '';
+
   try {
-    const d = await api('/ai/chat', {method:'POST', body:JSON.stringify({messages:chatHist[curMod], system:buildSys()})});
-    removeTyping();
-    const reply = d?.content?.filter(c=>c.type==='text').map(c=>c.text).join('\n') || (d?.error||'⚠️ Sin respuesta.');
-    chatHist[curMod].push({role:'assistant',content:reply});
-    addAIBubble(reply);
-  } catch(e) { removeTyping(); addAIBubble('⚠️ Error de conexión. Verificá internet e intentá de nuevo.'); }
+    const resp = await fetch(API + '/api/ai/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
+      body: JSON.stringify({ messages: chatHist[curMod], system: buildSys() })
+    });
+
+    if (!resp.ok) { prose.textContent = '⚠️ Error del servidor.'; finishBubble(card, '⚠️ Error del servidor.'); loading=false; document.getElementById('sendbtn').disabled=false; return; }
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (!data || data === '[DONE]') continue;
+        try {
+          const ev = JSON.parse(data);
+          if (ev.text) {
+            fullText += ev.text;
+            prose.innerHTML = mdRender(fullText);
+            const chat = document.getElementById('chat');
+            chat.scrollTop = chat.scrollHeight;
+          }
+          if (ev.error) { prose.textContent = '⚠️ ' + ev.error; }
+        } catch {}
+      }
+    }
+    finishBubble(card, fullText);
+    chatHist[curMod].push({role:'assistant',content:fullText});
+  } catch(e) {
+    prose.textContent = '⚠️ Error de conexión. Verificá internet e intentá de nuevo.';
+    finishBubble(card, '⚠️ Error de conexión.');
+  }
   loading=false; document.getElementById('sendbtn').disabled=false;
 }
 
@@ -966,6 +1052,29 @@ function addAIBubble(raw) {
     <button class="sub-btn sb-disc" onclick="this.closest('.msg').remove()">✕</button>`;
   card.appendChild(srow);
   wrap.appendChild(card); chat.appendChild(wrap); chat.scrollTop=99999;
+}
+
+function addAIBubbleStreaming() {
+  const chat = document.getElementById('chat');
+  const wrap = document.createElement('div'); wrap.className = 'msg';
+  wrap.innerHTML = `<div class="av av-ai-m">${SOL_SVG}</div>`;
+  const card = document.createElement('div'); card.className = 'ai-card';
+  const prose = document.createElement('div'); prose.className = 'ai-prose';
+  prose.innerHTML = '<span class="stream-cursor">▍</span>';
+  card.appendChild(prose);
+  wrap.appendChild(card); chat.appendChild(wrap); chat.scrollTop = 99999;
+  return { card, prose };
+}
+
+function finishBubble(card, raw) {
+  // Replace prose with full rendered card + action buttons
+  card.innerHTML = buildCard(raw);
+  const srow = document.createElement('div'); srow.className = 'submit-row';
+  srow.innerHTML = `<button class="sub-btn sb-copy" onclick="copyText(${JSON.stringify(raw.slice(0,2000))})">📋 Copiar</button>
+    <button class="sub-btn sb-send" onclick="submitToQueue(${JSON.stringify(raw.slice(0,1200))},this)">📤 Enviar para revisión</button>
+    <button class="sub-btn sb-disc" onclick="this.closest('.msg').remove()">✕</button>`;
+  card.appendChild(srow);
+  const chat = document.getElementById('chat'); chat.scrollTop = 99999;
 }
 
 function buildCard(raw) {
