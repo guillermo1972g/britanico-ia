@@ -1,4 +1,5 @@
 const express = require('express');
+const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
@@ -9,6 +10,32 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'britanico-ia-secret-2024';
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
+const NOTIFY_EMAIL = 'wdreifus@gmail.com';
+
+/* ══════ EMAIL HELPER ══════ */
+async function sendEmail(subject, html) {
+  const user = process.env.GMAIL_USER;
+  const pass = process.env.GMAIL_APP_PASSWORD;
+  if (!user || !pass) {
+    console.log('[Email] Variables GMAIL_USER / GMAIL_APP_PASSWORD no configuradas — email omitido.');
+    return;
+  }
+  try {
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user, pass }
+    });
+    await transporter.sendMail({
+      from: `"Shopping Británico IA" <${user}>`,
+      to: NOTIFY_EMAIL,
+      subject,
+      html
+    });
+    console.log('[Email] Enviado:', subject);
+  } catch (e) {
+    console.error('[Email] Error:', e.message);
+  }
+}
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -60,6 +87,7 @@ app.post('/api/auth/check', (req, res) => {
   const users = read('users') || [];
   const user = users.find(u => u.email.toLowerCase() === email?.toLowerCase());
   if (!user) return res.status(404).json({ error: 'No existe una cuenta con ese email.' });
+  if (user.disabled) return res.status(403).json({ error: 'Tu acceso al sistema está deshabilitado. Contactá al administrador.' });
   res.json({ requiresPassword: !user.noPassword, name: user.name });
 });
 
@@ -68,6 +96,7 @@ app.post('/api/auth/login', (req, res) => {
   const users = read('users') || [];
   const user = users.find(u => u.email.toLowerCase() === email?.toLowerCase());
   if (!user) return res.status(401).json({ error: 'No existe una cuenta con ese email.' });
+  if (user.disabled) return res.status(403).json({ error: 'Tu acceso al sistema está deshabilitado. Contactá al administrador.' });
   if (!user.noPassword && !bcrypt.compareSync(password || '', user.password || ''))
     return res.status(401).json({ error: 'Contraseña incorrecta.' });
   const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
@@ -353,13 +382,89 @@ app.post('/api/research', auth, async (req, res) => {
   }
 });
 
+/* ══════ TOGGLE USER ACCESS ══════ */
+app.put('/api/users/:id/toggle-access', auth, adminOnly, async (req, res) => {
+  if (req.user.id == req.params.id)
+    return res.status(400).json({ error: 'No podés deshabilitar tu propio acceso.' });
+  const users = read('users') || [];
+  const idx = users.findIndex(u => u.id == req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Usuario no encontrado.' });
+  users[idx].disabled = !users[idx].disabled;
+  write('users', users);
+  const action = users[idx].disabled ? 'deshabilitado' : 'habilitado';
+  addNotif({ type: 'settings', from: req.user.name, message: `🔐 ${req.user.name} ${action} el acceso de ${users[idx].name}.` });
+  const when = new Date().toLocaleString('es-PY', { timeZone: 'America/Asuncion', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  await sendEmail(
+    `🔐 Acceso ${action} — ${users[idx].name} · Shopping Británico IA`,
+    `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+      <h2 style="color:${users[idx].disabled?'#e05060':'#00d4a0'};margin-bottom:4px">Shopping Británico IA</h2>
+      <p style="color:#666;font-size:13px;margin-bottom:20px">Notificación de acceso</p>
+      <div style="background:#f5f5f5;border-radius:8px;padding:16px;margin-bottom:16px">
+        <p style="margin:0 0 8px"><strong>Usuario:</strong> ${users[idx].name}</p>
+        <p style="margin:0 0 8px"><strong>Email:</strong> ${users[idx].email}</p>
+        <p style="margin:0 0 8px"><strong>Acción:</strong> Acceso <strong>${action}</strong> por ${req.user.name}</p>
+        <p style="margin:0"><strong>Fecha y hora:</strong> ${when}</p>
+      </div>
+    </div>`
+  );
+  res.json({ ok: true, disabled: users[idx].disabled });
+});
+
+/* ══════ CHANGE PASSWORD ══════ */
+app.put('/api/auth/change-password', auth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!newPassword || newPassword.length < 6)
+    return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 6 caracteres.' });
+
+  const users = read('users') || [];
+  const idx = users.findIndex(u => u.id === req.user.id);
+  if (idx === -1) return res.status(404).json({ error: 'Usuario no encontrado.' });
+
+  const user = users[idx];
+
+  // If user has password, verify current one
+  if (!user.noPassword && user.password) {
+    if (!currentPassword || !bcrypt.compareSync(currentPassword, user.password))
+      return res.status(401).json({ error: 'La contraseña actual es incorrecta.' });
+  }
+
+  users[idx].password = bcrypt.hashSync(newPassword, 10);
+  users[idx].noPassword = false;
+  write('users', users);
+
+  // Log activity
+  const log = read('activity') || [];
+  log.unshift({ user: user.name, role: user.role, action: 'password_changed', at: new Date().toISOString() });
+  write('activity', log.slice(0, 200));
+
+  // Notify admin by email
+  const when = new Date().toLocaleString('es-PY', { timeZone: 'America/Asuncion', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  await sendEmail(
+    `🔐 Cambio de contraseña — ${user.name} · Shopping Británico IA`,
+    `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+      <h2 style="color:#00d4a0;margin-bottom:4px">Shopping Británico IA</h2>
+      <p style="color:#666;font-size:13px;margin-bottom:20px">Notificación de seguridad</p>
+      <div style="background:#f5f5f5;border-radius:8px;padding:16px;margin-bottom:16px">
+        <p style="margin:0 0 8px"><strong>Usuario:</strong> ${user.name}</p>
+        <p style="margin:0 0 8px"><strong>Email:</strong> ${user.email}</p>
+        <p style="margin:0 0 8px"><strong>Rol:</strong> ${user.role}</p>
+        <p style="margin:0"><strong>Fecha y hora:</strong> ${when}</p>
+      </div>
+      <p style="color:#888;font-size:12px">Si no reconocés este cambio, ingresá al panel de administración y revisá los usuarios.</p>
+    </div>`
+  );
+
+  addNotif({ type: 'settings', from: user.name, message: `🔐 ${user.name} cambió su contraseña.` });
+  res.json({ ok: true });
+});
+
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
 /* INIT */
 function initData() {
   if (!read('users')) {
     write('users', [
-      { id: 1, name: 'Soporte Técnico', email: 'wdreifus@gmail.com', password: bcrypt.hashSync('Admin2024!', 10), noPassword: false, role: 'admin' },
+      { id: 1, name: 'Soporte Técnico', email: 'wdreifus@gmail.com', password: null, noPassword: true, role: 'admin' },
       { id: 2, name: 'Sra Lidia', email: 'lidiadreifus@gmail.com', password: null, noPassword: true, role: 'jefa' },
       { id: 3, name: 'Mirella', email: 'equipo1@britanico.com.py', password: bcrypt.hashSync('Equipo2024!', 10), noPassword: false, role: 'equipo' },
       { id: 4, name: 'Jorge', email: 'equipo2@britanico.com.py', password: bcrypt.hashSync('Equipo2024!', 10), noPassword: false, role: 'equipo' },
